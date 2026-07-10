@@ -2,10 +2,10 @@
 	"FileVersion": 3,
 	"Version": 1,
 	"VersionName": "1.0",
-	"FriendlyName": "PythonScriptingWidget",
+	"FriendlyName": "CGPythonExtension",
 	"Description": "",
 	"Category": "Other",
-	"CreatedBy": "hyan",
+	"CreatedBy": "zgxx",
 	"CreatedByURL": "",
 	"DocsURL": "",
 	"MarketplaceURL": "",
@@ -16,8 +16,8 @@
 	"Installed": false,
 	"Modules": [
 		{
-			"Name": "PythonScriptingWidget",
-			"Type": "Runtime",
+			"Name": "UMGEditorPyEx",
+			"Type": "Editor",
 			"LoadingPhase": "Default"
 		}
 	]

@@ -2,9 +2,9 @@
 
 using UnrealBuildTool;
 
-public class PythonScriptingWidget : ModuleRules
+public class UMGEditorPyEx : ModuleRules
 {
-	public PythonScriptingWidget(ReadOnlyTargetRules Target) : base(Target)
+	public UMGEditorPyEx(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		
@@ -26,7 +26,15 @@ public class PythonScriptingWidget : ModuleRules
 			new string[]
 			{
 				"Core",
-				// ... add other public dependencies that you statically link with here ...
+                "CoreUObject",
+                "Engine",
+                "EditorSubsystem",
+                "UMG",
+                "Blutility",
+                "Slate",
+                "SlateCore",
+                "InputCore",
+				"ApplicationCore",
 			}
 			);
 			
@@ -34,10 +42,9 @@ public class PythonScriptingWidget : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
-				"CoreUObject",
-				"Engine",
-				"Slate",
-				"SlateCore",
+				"UMGEditor",
+                "LevelEditor",
+				"UnrealEd",
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

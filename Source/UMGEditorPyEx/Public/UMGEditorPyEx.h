@@ -2,10 +2,9 @@
 
 #pragma once
 
-#include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
-class FPythonScriptingWidgetModule : public IModuleInterface
+class FUMGEditorPyExModule : public IModuleInterface
 {
 public:
 
