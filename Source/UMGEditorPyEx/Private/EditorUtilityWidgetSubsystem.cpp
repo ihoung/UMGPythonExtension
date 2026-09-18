@@ -2,6 +2,7 @@
 
 #include "EditorUtilityWidgetSubsystem.h"
 
+#include "EditorWidgetTreeSerialization.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "LevelEditor.h"
@@ -13,6 +14,56 @@
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Kismet2/blueprintEditorUtils.h"
 
+namespace
+{
+	FString NormalizeToFilename(const FString& Path, const FString& InExtension=TEXT(""))
+	{
+		if (Path.IsEmpty())
+		{
+			return Path;
+		}
+
+		FString PackageName;
+
+		if (FPaths::IsDrive(Path) || !Path.StartsWith(TEXT("/")))
+		{
+			return FPaths::SetExtension(Path, InExtension);
+		}
+
+		// Treat it as an Unreal long package name.
+		return FPackageName::LongPackageNameToFilename(Path, InExtension);
+	}
+
+	FString NormalizeToPackageName(const FString& Path)
+	{
+		FString PackageName;
+
+		if (FPackageName::TryConvertFilenameToLongPackageName(Path, PackageName))
+		{
+			return PackageName;
+		}
+
+		if (!FPaths::IsDrive(Path) && Path.StartsWith(TEXT("/")))
+		{
+			return Path;
+		}
+
+		// Otherwise assume it is already a package-style path.
+		PackageName = Path;
+		PackageName.ReplaceInline(TEXT("\\"), TEXT("/"));
+
+		// Remove whatever extension it has.
+		const int32 SlashIndex = PackageName.Find(TEXT("/"), ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+		const int32 DotIndex = PackageName.Find(TEXT("."), ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+
+		if (DotIndex > SlashIndex)
+		{
+			PackageName.LeftInline(DotIndex);
+		}
+
+		return FPackageName::FilenameToLongPackageName(PackageName);
+	}
+}
 
 UEditorUtilityWidgetSubsystem::UEditorUtilityWidgetSubsystem()
 	: UEditorSubsystem()
@@ -71,37 +122,51 @@ UEditorUtilityWidget* UEditorUtilityWidgetSubsystem::SpawnAndRegisterTab(TSubcla
 	if (IsRunningCommandlet()) return nullptr;
 	ensure(RegisteredWidgets.Contains(WidgetClass));
 
-	FString AssetPath = RegisteredWidgets[WidgetClass];
-	if (AssetPath.IsEmpty()) return nullptr;
-
-	UPackage* Package = LoadPackage(nullptr, *AssetPath, LOAD_None);
-	if (!Package)
+	UEditorUtilityWidgetBlueprint* TransientBP = nullptr;
+	if (CreatedBlueprints.Contains(WidgetClass))
 	{
-		UE_LOG(LogTemp, Error, TEXT("Loading Failed: Nonexistent Path %s"), *AssetPath);
-		return nullptr;
+		TransientBP = CreatedBlueprints[WidgetClass];
 	}
-	UEditorUtilityWidgetBlueprint* WidgetBlueprint = FindObject<UEditorUtilityWidgetBlueprint>(Package, *FPackageName::GetShortName(*AssetPath));
-	if (!WidgetBlueprint)
-	{
-		UE_LOG(LogTemp, Error, TEXT("Loading Failed: Nonexistent Path %s"), *AssetPath);
-		return nullptr;
+	else 
+	{ 
+		FString AssetPath = NormalizeToPackageName(RegisteredWidgets[WidgetClass]);
+		if (AssetPath.IsEmpty()) return nullptr;
+
+		UPackage* Package = LoadPackage(nullptr, *AssetPath, LOAD_None);
+		if (Package)
+		{
+			UEditorUtilityWidgetBlueprint* WidgetBlueprint = FindObject<UEditorUtilityWidgetBlueprint>(Package, *FPackageName::GetShortName(*AssetPath));
+			if (WidgetBlueprint)
+			{
+				TransientBP = CreateTransientBlueprint(WidgetClass, WidgetBlueprint);
+			}
+		}
+
+		if (!TransientBP)
+		{
+			FString SerializedWTFilePath = NormalizeToFilename(RegisteredWidgets[WidgetClass], TEXT(".json"));
+			TransientBP = CreateTransientBlueprint(WidgetClass, nullptr, nullptr, SerializedWTFilePath);
+		}
 	}
 
-	UEditorUtilityWidgetBlueprint* TransientBP = CreatedBlueprints.Contains(WidgetClass) ? CreatedBlueprints[WidgetClass] : CreateTransientBlueprint(WidgetBlueprint, WidgetClass);
 	if (TransientBP)
 	{
 		UEditorUtilitySubsystem* EditorUtilitySubsystem = GEditor->GetEditorSubsystem<UEditorUtilitySubsystem>();
 		return EditorUtilitySubsystem->SpawnAndRegisterTab(TransientBP);
 	}
+	else
+	{
+		UE_LOG(LogTemp, Error, TEXT("Loading Failed: Nonexistent Path %s"), *RegisteredWidgets[WidgetClass]);
+	}
 
 	return nullptr;
 }
 
-inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTransientBlueprint(UEditorUtilityWidgetBlueprint* InBlueprint, TSubclassOf<UEditorUtilityWidget> InWidgetClass, UObject* Outer)
+inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTransientBlueprint(TSubclassOf<UEditorUtilityWidget> InWidgetClass, UEditorUtilityWidgetBlueprint* InBlueprint, UObject* Outer, FString SerializedWidgetTreePath)
 {
-	if (InBlueprint && InWidgetClass)
+	if (InWidgetClass)
 	{
-		FName TransientBPName = FName(*FString::Printf(TEXT("%s_%s"), *InBlueprint->GetFName().ToString(), *InWidgetClass->GetFName().ToString()));
+		FName TransientBPName = FName(*FString::Printf(TEXT("%s_%s"), InBlueprint ? *InBlueprint->GetFName().ToString() : *FPackageName::GetShortName(FPaths::GetBaseFilename(SerializedWidgetTreePath)), *InWidgetClass->GetFName().ToString()));
 		FString TransientBPPath = Outer ? FString::Printf(TEXT("%s:%s"), *Outer->GetPathName(), *TransientBPName.ToString()) : 
 			FString::Printf(TEXT("%s.%s"), *GetTransientPackage()->GetPathName(), *TransientBPName.ToString());
 		TSoftObjectPtr<UEditorUtilityWidgetBlueprint> ExistingTransientBPPtr = TSoftObjectPtr<UEditorUtilityWidgetBlueprint>(FSoftObjectPath(TransientBPPath));
@@ -112,19 +177,48 @@ inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTrans
 			return ExistingTransientBP;
 		}
 
-		UEditorUtilityWidgetBlueprint* TransientBP = Cast<UEditorUtilityWidgetBlueprint>(
-			StaticDuplicateObject(InBlueprint, Outer ? Outer : GetTransientPackage(), TransientBPName, RF_Transient, UEditorUtilityWidgetBlueprint::StaticClass())
-		);
+		UEditorUtilityWidgetBlueprint* TransientBP;
+		if (InBlueprint)
+		{
+			TransientBP = Cast<UEditorUtilityWidgetBlueprint>(
+				StaticDuplicateObject(InBlueprint, Outer ? Outer : GetTransientPackage(), TransientBPName, RF_Transient, UEditorUtilityWidgetBlueprint::StaticClass())
+			);
+			if (TransientBP) ModifyBlueprintInternalReference(TransientBP, InWidgetClass);
+
+		}
+		else
+		{
+			TransientBP = NewObject< UEditorUtilityWidgetBlueprint>(
+				Outer ? Outer : GetTransientPackage(),
+				MakeUniqueObjectName(GetTransientPackage(), UEditorUtilityWidgetBlueprint::StaticClass(), TransientBPName),
+				RF_Transient
+			);
+			if (!FEditorWidgetTreeSerialization::LoadSerializationToWidgetBlueprint(SerializedWidgetTreePath, TransientBP, [&](FString SerializedEntryWidgetTreePath) -> UClass*
+				{
+					TMap<FString, TSubclassOf<UPyEditorUtilityEntryWidget>> EntryWidgetClassMap = RegisteredEntryWidgets[InWidgetClass];
+					FString RegisteredEntryWidgetBPPath = EntryWidgetClassMap.Contains(SerializedEntryWidgetTreePath) ? SerializedEntryWidgetTreePath : NormalizeToPackageName(SerializedEntryWidgetTreePath);
+					if (EntryWidgetClassMap.Contains(RegisteredEntryWidgetBPPath))
+					{
+						TSubclassOf<UEditorUtilityWidget> RegisteredEntryWidgetClass = EntryWidgetClassMap[RegisteredEntryWidgetBPPath];
+						UEditorUtilityWidgetBlueprint* TransientEntryWidgetBP = CreateTransientBlueprint(RegisteredEntryWidgetClass, nullptr, TransientBP, SerializedEntryWidgetTreePath);
+						if (TransientEntryWidgetBP)
+						{	
+							return TransientEntryWidgetBP->GeneratedClass;
+						}
+					}
+					return nullptr;
+				}))
+			{
+				UE_LOG(LogTemp, Error, TEXT("Loading Serialized Widget Tree to Transient Blueprint Failed: Path %s"), *SerializedWidgetTreePath);
+				return nullptr;
+			}
+		}
 
 		if (TransientBP)
 		{
-			ModifyBlueprintInternalReference(TransientBP, InWidgetClass);
-
 			TransientBP->ParentClass = InWidgetClass;
 			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(TransientBP);
 			FKismetEditorUtilities::CompileBlueprint(TransientBP, EBlueprintCompileOptions::SkipGarbageCollection);
-
-			FString InBPPath = InBlueprint->GetPackage()->GetPathName();
 
 			return TransientBP;
 		}
@@ -148,11 +242,11 @@ inline void UEditorUtilityWidgetSubsystem::ModifyBlueprintInternalReference(UEdi
 					if (TSubclassOf<UUserWidget> OriginalEntryWidgetClass = ListViewContent->GetEntryWidgetClass())
 					{
 						UEditorUtilityWidgetBlueprint* OriginalEntryWidgetBP = Cast<UEditorUtilityWidgetBlueprint>(OriginalEntryWidgetClass->ClassGeneratedBy);
-						FString OriginalEntryWidgetBPPath = OriginalEntryWidgetBP ? OriginalEntryWidgetBP->GetPackage()->GetPathName() : FString();
+						FString OriginalEntryWidgetBPPath = OriginalEntryWidgetBP ? OriginalEntryWidgetBP->GetPackage()->GetPathName() : TEXT("");
 						TSubclassOf<UEditorUtilityWidget> RegisteredEntryWidgetClass = EntryWidgetClassMap.Contains(OriginalEntryWidgetBPPath) ? EntryWidgetClassMap[OriginalEntryWidgetBPPath] : nullptr;
 						if (RegisteredEntryWidgetClass)
 						{
-							UEditorUtilityWidgetBlueprint* TransientEntryWidgetBP = CreateTransientBlueprint(OriginalEntryWidgetBP, RegisteredEntryWidgetClass, InBlueprint);
+							UEditorUtilityWidgetBlueprint* TransientEntryWidgetBP = CreateTransientBlueprint(RegisteredEntryWidgetClass, OriginalEntryWidgetBP, InBlueprint);
 							if (TransientEntryWidgetBP)
 							{
 								FProperty* Property = ListViewContent->GetClass()->FindPropertyByName(TEXT("EntryWidgetClass"));

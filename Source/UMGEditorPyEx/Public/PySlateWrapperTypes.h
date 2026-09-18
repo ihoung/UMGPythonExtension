@@ -6,6 +6,7 @@
 #include "Input/Events.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
+#include "Misc/EngineVersionComparison.h"
 #include "PySlateWrapperTypes.generated.h"
 
 #define LOCTEXT_NAMESPACE "PySlateWrapperTypes"
@@ -525,6 +526,17 @@ enum class EPyGestureEvent : uint8
 	Count = static_cast<uint8>(EGestureEvent::Count)
 };
 
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5,8,0)
+UENUM(BlueprintType)
+enum class EPyGesturePhase : uint8
+{
+	None = static_cast<uint8>(EGesturePhase::None),
+	Update = static_cast<uint8>(EGesturePhase::Update),
+	Started = static_cast<uint8>(EGesturePhase::Started),
+	Ended = static_cast<uint8>(EGesturePhase::Ended)
+};
+#endif
+
 
 USTRUCT(BlueprintType)
 struct FPyPointerEvent
@@ -547,6 +559,9 @@ public:
 		, Force(1.0f)
 		, bIsTouchEvent(false)
 		, GestureType(EPyGestureEvent::None)
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5,8,0)
+		, GesturePhase(EPyGesturePhase::None)
+#endif
 		, WheelOrGestureDelta(0.0f, 0)
 		, bIsDirectionInvertedFromDevice(false)
 		, bIsTouchForceChanged(false)
@@ -562,7 +577,12 @@ public:
 		, PressedButtons(InPointerEvent.GetPressedButtons())
 		, EffectingButton(InPointerEvent.GetEffectingButton())
 		, PointerIndex(InPointerEvent.GetPointerIndex())
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5,8,0)
+		, TouchpadIndex(0)
+		, GesturePhase(static_cast<EPyGesturePhase>(InPointerEvent.GetGesturePhase()))
+#else
 		, TouchpadIndex(InPointerEvent.GetTouchpadIndex())
+#endif
 		, Force(InPointerEvent.GetTouchForce())
 		, bIsTouchEvent(InPointerEvent.IsTouchEvent())
 		, GestureType(static_cast<EPyGestureEvent>(InPointerEvent.GetGestureType()))
@@ -600,6 +620,7 @@ public:
 	uint32 GetPointerIndex() const { return PointerIndex; }
 
 	/** Returns the index of the touch pad that generated this event (for platforms with multiple touch pads per user) */
+	UE_DEPRECATED(5.8, "TouchpadIndex is was never fully implemented and has been retired.")
 	uint32 GetTouchpadIndex() const { return TouchpadIndex; }
 
 	/** Returns the force of a touch (1.0f is mapped to an general touch force, < 1 is "light", > 1 is "heavy", and 10 is the max force possible) */
@@ -616,6 +637,11 @@ public:
 
 	/** Returns the type of touch gesture */
 	EGestureEvent GetGestureType() const { return static_cast<EGestureEvent>(GestureType); }
+
+	/** Returns the phase of the gesture (Started, Update, Ended) */
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5,8,0)
+	EGesturePhase GetGesturePhase() const { return static_cast<EGesturePhase>(GesturePhase); }
+#endif
 
 	/** Returns the change in gesture value since the last gesture event of the same type. */
 	const FDeprecateSlateVector2D& GetGestureDelta() const { return WheelOrGestureDelta; }
@@ -652,6 +678,9 @@ public:
 				PressedButtons,
 				GetModifierKeys(),
 				GetGestureType(),
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5,8,0)
+				GetGesturePhase(),
+#endif
 				GetGestureDelta(),
 				bIsDirectionInvertedFromDevice
 			);
@@ -659,16 +688,18 @@ public:
 		else if (bIsTouchEvent)
 		{
 			return FPointerEvent(
-				UserIndex,
-				PointerIndex,
-				ScreenSpacePosition,
-				LastScreenSpacePosition,
-				Force,
-				PressedButtons.Difference(FTouchKeySet::StandardSet).IsEmpty(),
-				bIsTouchForceChanged,
-				bIsTouchFirstMove,
-				GetModifierKeys(),
-				TouchpadIndex
+				UserIndex
+				, PointerIndex
+				, ScreenSpacePosition
+				, LastScreenSpacePosition
+				, Force
+				, PressedButtons.Difference(FTouchKeySet::StandardSet).IsEmpty()
+				, bIsTouchForceChanged
+				, bIsTouchFirstMove
+				, GetModifierKeys()
+#if UE_VERSION_OLDER_THAN(5,8,0)
+				, TouchpadIndex
+#endif
 			);
 		}
 		return FPointerEvent(
@@ -714,6 +745,11 @@ private:
 
 	UPROPERTY()
 	EPyGestureEvent GestureType;
+
+#if UE_VERSION_NEWER_THAN_OR_EQUAL(5,8,0)
+	UPROPERTY()
+	EPyGesturePhase GesturePhase;
+#endif
 
 	UPROPERTY()
 	FDeprecateSlateVector2D WheelOrGestureDelta;

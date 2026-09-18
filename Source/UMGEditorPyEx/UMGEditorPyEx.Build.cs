@@ -12,14 +12,14 @@ public class UMGEditorPyEx : ModuleRules
 			new string[] {
 				// ... add public include paths required here ...
 			}
-			);
+		);
 				
 		
 		PrivateIncludePaths.AddRange(
 			new string[] {
 				// ... add other private include paths required here ...
 			}
-			);
+		);
 			
 		
 		PublicDependencyModuleNames.AddRange(
@@ -36,7 +36,7 @@ public class UMGEditorPyEx : ModuleRules
                 "InputCore",
 				"ApplicationCore",
 			}
-			);
+		);
 			
 		
 		PrivateDependencyModuleNames.AddRange(
@@ -44,10 +44,17 @@ public class UMGEditorPyEx : ModuleRules
 			{
 				"UMGEditor",
                 "LevelEditor",
-				"UnrealEd",
-				// ... add private dependencies that you statically link with here ...	
-			}
-			);
+                "UnrealEd",
+                "Json",
+                "JsonUtilities",
+                "DeveloperSettings",
+                "ContentBrowser",
+                "DesktopPlatform",
+				"Projects",
+				"ToolMenus",
+				"AssetRegistry"
+            }
+		);
 		
 		
 		DynamicallyLoadedModuleNames.AddRange(
@@ -55,6 +62,6 @@ public class UMGEditorPyEx : ModuleRules
 			{
 				// ... add any modules that your module loads dynamically here ...
 			}
-			);
+		);
 	}
 }

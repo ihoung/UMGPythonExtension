@@ -41,7 +41,7 @@ protected:
 	TMap<TSubclassOf<UEditorUtilityWidget>, FString> RegisteredWidgets;
 
 private:
-	inline UEditorUtilityWidgetBlueprint* CreateTransientBlueprint(UEditorUtilityWidgetBlueprint* InBlueprint, TSubclassOf<UEditorUtilityWidget> InWidgetClass, UObject* Outer=nullptr);
+	inline UEditorUtilityWidgetBlueprint* CreateTransientBlueprint(TSubclassOf<UEditorUtilityWidget> InWidgetClass, UEditorUtilityWidgetBlueprint* InBlueprint, UObject* Outer=nullptr, FString SerializedWidgetTreePath=TEXT(""));
 
 	inline void ModifyBlueprintInternalReference(UEditorUtilityWidgetBlueprint* InBlueprint, TSubclassOf<UEditorUtilityWidget> InWidgetClass);
 
