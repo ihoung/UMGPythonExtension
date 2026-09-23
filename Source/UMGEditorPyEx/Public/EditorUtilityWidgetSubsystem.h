@@ -34,7 +34,7 @@ public:
 	void RegisterEntryWidgetClasses(TSubclassOf<UEditorUtilityWidget> WidgetClass, TMap<FString, TSubclassOf<UPyEditorUtilityEntryWidget>> EntryWidgetClasses);
 
 	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
-	UEditorUtilityWidget* SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass);
+	UEditorUtilityWidget* SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass, bool bLoadSerialized=false);
 
 protected:
 	TMap<TSubclassOf<UEditorUtilityWidget>, TMap<FString, TSubclassOf<UPyEditorUtilityEntryWidget>>> RegisteredEntryWidgets;

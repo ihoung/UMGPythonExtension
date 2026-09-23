@@ -34,6 +34,24 @@ namespace
 	{
 		TSharedRef<FJsonObject> PropertiesObject = MakeShared<FJsonObject>();
 		FJsonObjectConverter::UStructToJsonObject(Object->GetClass(), Object, PropertiesObject, CPF_Edit, CPF_Transient);
+
+		// Delegate properties are not recorded in the json: their bindings live in the Blueprint graph and
+		// cannot be restored with the widget tree, and unbound dynamic delegates serialize as "(null).None",
+		// which would fail to import on load (see the deserialization side for the fallback filtering).
+		TArray<FString> DelegateKeys;
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : PropertiesObject->Values)
+		{
+			const FProperty* Property = FindFProperty<FProperty>(Object->GetClass(), *PropertyPair.Key);
+			if (Property && (CastField<FDelegateProperty>(Property) || CastField<FMulticastDelegateProperty>(Property)))
+			{
+				DelegateKeys.Add(PropertyPair.Key);
+			}
+		}
+		for (const FString& DelegateKey : DelegateKeys)
+		{
+			PropertiesObject->RemoveField(DelegateKey);
+		}
+
 		return PropertiesObject;
 	}
 
@@ -189,10 +207,14 @@ namespace
 	}
 
 	/**
-	 * Handles the 'EntryWidgetClass' property after the widget properties have been imported: if the referenced
-	 * generated class could not be resolved, looks for a possible serialized json file of the entry widget in the
-	 * same directory as the loaded file and passes it to the predicate, which may create/load the corresponding
-	 * Widget Blueprint so that the class becomes available.
+	 * Handles the 'EntryWidgetClass' property after the widget properties have been imported. The
+	 * property itself is excluded from the bulk import (see LoadWidgetFromJsonObject); it is resolved
+	 * here with the following priority:
+	 * 1. The serialized json file of the entry widget found next to the loaded file, passed to the
+	 *    predicate, which may create a transient Widget Blueprint (e.g. derived from a registered
+	 *    native entry class) so that the entry widget is rebuilt from its serialized tree.
+	 * 2. The generated class of the original entry Widget Blueprint asset, when no serialized file
+	 *    exists or the predicate could not provide a class.
 	 */
 	bool ResolveEntryWidgetClass(UWidget* Widget, const TSharedPtr<FJsonObject>& PropertiesObject, const FString& JsonDir, TFunctionRef<UClass*(FString)> EntryWidgetClassPredicate)
 	{
@@ -203,25 +225,40 @@ namespace
 		}
 
 		FString EntryClassPath;
-		if (!PropertiesObject->TryGetStringField(TEXT("EntryWidgetClass"), EntryClassPath) || EntryClassPath.IsEmpty())
+		// The JSON key is the property's authored name, whose casing differs between engine versions
+		// ('EntryWidgetClass' vs the standardized 'entryWidgetClass'); look it up case-insensitively.
+		const TSharedPtr<FJsonValue>* EntryClassValue = nullptr;
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : PropertiesObject->Values)
+		{
+			if (PropertyPair.Key.Equals(TEXT("EntryWidgetClass"), ESearchCase::IgnoreCase))
+			{
+				EntryClassValue = &PropertyPair.Value;
+				break;
+			}
+		}
+		if (!EntryClassValue || !(*EntryClassValue)->TryGetString(EntryClassPath) || EntryClassPath.IsEmpty())
 		{
 			return true;
 		}
 
-		UClass* EntryWidgetClass = Cast<UClass>(EntryWidgetClassProperty->GetObjectPropertyValue_InContainer(Widget));
+		UClass* EntryWidgetClass = nullptr;
+
+		// Prefer rebuilding the entry widget from its serialized json file: the predicate may create a
+		// transient Widget Blueprint derived from a registered entry class (e.g. a Python
+		// UPyEditorUtilityEntryWidget), which must take precedence over the original Widget Blueprint
+		// asset's generated class whenever both are available.
+		const FString SerializedFile = FindSerializedFileForEntryClass(JsonDir, EntryClassPath);
+		if (!SerializedFile.IsEmpty())
+		{
+			EntryWidgetClass = EntryWidgetClassPredicate(SerializedFile);
+		}
+
+		// Fall back to the generated class of the original entry Widget Blueprint asset, e.g. when no
+		// serialized file exists next to the loaded file or the entry was not registered with the
+		// predicate's owner.
 		if (!EntryWidgetClass)
 		{
-			// The referenced generated class is not available (e.g. the Widget Blueprint asset does not exist yet)
-			const FString SerializedFile = FindSerializedFileForEntryClass(JsonDir, EntryClassPath);
-			if (!SerializedFile.IsEmpty())
-			{
-				
-				EntryWidgetClass = EntryWidgetClassPredicate(SerializedFile);
-			}
-			else
-			{
-				UE_LOG(LogTemp, Warning, TEXT("Entry widget class '%s' could not be resolved and no serialized file was found in '%s'."), *EntryClassPath, *JsonDir);
-			}
+			EntryWidgetClass = StaticLoadClass(EntryWidgetClassProperty->PropertyClass, nullptr, *EntryClassPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
 		}
 
 		if (EntryWidgetClass)
@@ -230,6 +267,7 @@ namespace
 			return true;
 		}
 
+		UE_LOG(LogTemp, Warning, TEXT("Entry widget class '%s' could be resolved neither from a serialized file in '%s' nor from its original asset."), *EntryClassPath, *JsonDir);
 		return false;
 	}
 
@@ -314,7 +352,42 @@ namespace
 		const TSharedPtr<FJsonObject>* PropertiesObjectPtr = nullptr;
 		if (WidgetObject->TryGetObjectField(TEXT("properties"), PropertiesObjectPtr))
 		{
-			FJsonObjectConverter::JsonObjectToUStruct(PropertiesObjectPtr->ToSharedRef(), NewWidget->GetClass(), NewWidget, CPF_Edit, CPF_Transient);
+			// Filter out properties that FJsonObjectConverter cannot import:
+			// - Delegate properties: unbound dynamic delegates serialize as "(null).None", which fails to
+			//   import through FProperty::ImportText; since FJsonObjectConverter::JsonObjectToUStruct aborts
+			//   on the first failing property, all properties iterated after the delegate would silently keep
+			//   their defaults (e.g. a TreeView's 'verticalEntrySpacing' is never restored because its
+			//   'bP_OnGetItemChildren' bindable event is iterated first). Delegate bindings live in the
+			//   Blueprint graph and cannot be restored with the widget tree anyway.
+			// - UWidget's instanced 'Slot' property: the slot is already restored from the dedicated 'slot'
+			//   node above; importing the nested subobject here would replace the slot created by AddChild
+			//   with a duplicate that has no parent panel.
+			// - The ListView-style 'EntryWidgetClass' property: importing it resolves (and loads) the
+			//   original entry Widget Blueprint asset as a side effect of FClassProperty::ImportText, after
+			//   which the entry could never be rebuilt from its own serialized json anymore; when the asset
+			//   does not exist, the import would fail and abort the remaining properties (same as the
+			//   delegate case above). The property is resolved explicitly by ResolveEntryWidgetClass below
+			//   instead, with the serialized file taking priority over the original asset.
+			TSharedRef<FJsonObject> ImportProperties = MakeShared<FJsonObject>();
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& PropertyPair : (*PropertiesObjectPtr)->Values)
+			{
+				const FProperty* Property = FindFProperty<FProperty>(NewWidget->GetClass(), *PropertyPair.Key);
+				if (Property
+					&& (CastField<FDelegateProperty>(Property)
+						|| CastField<FMulticastDelegateProperty>(Property)
+						|| (Property->GetFName() == FName(TEXT("Slot")) && Property->GetOwnerStruct() == UWidget::StaticClass())
+						|| (CastField<FClassProperty>(Property) && Property->GetFName() == FName(TEXT("EntryWidgetClass")))))
+				{
+					continue;
+				}
+				ImportProperties->SetField(PropertyPair.Key, PropertyPair.Value);
+			}
+
+			FText ImportFailReason;
+			if (!FJsonObjectConverter::JsonObjectToUStruct(ImportProperties, NewWidget->GetClass(), NewWidget, CPF_Edit, CPF_Transient, /*bStrictMode=*/false, &ImportFailReason))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Some properties of widget '%s' could not be imported: %s"), *NewWidget->GetName(), *ImportFailReason.ToString());
+			}
 			if (!ResolveEntryWidgetClass(NewWidget, *PropertiesObjectPtr, JsonDir, EntryWidgetClassPredicate)) return nullptr;
 		}
 

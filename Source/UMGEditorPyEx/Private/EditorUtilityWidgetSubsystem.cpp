@@ -117,7 +117,7 @@ void UEditorUtilityWidgetSubsystem::RegisterEntryWidgetClasses(TSubclassOf<UEdit
 	}
 }
 
-UEditorUtilityWidget* UEditorUtilityWidgetSubsystem::SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass)
+UEditorUtilityWidget* UEditorUtilityWidgetSubsystem::SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass, bool bLoadSerialized)
 {
 	if (IsRunningCommandlet()) return nullptr;
 	ensure(RegisteredWidgets.Contains(WidgetClass));
@@ -129,16 +129,19 @@ UEditorUtilityWidget* UEditorUtilityWidgetSubsystem::SpawnAndRegisterTab(TSubcla
 	}
 	else 
 	{ 
-		FString AssetPath = NormalizeToPackageName(RegisteredWidgets[WidgetClass]);
-		if (AssetPath.IsEmpty()) return nullptr;
-
-		UPackage* Package = LoadPackage(nullptr, *AssetPath, LOAD_None);
-		if (Package)
+		if (!bLoadSerialized)
 		{
-			UEditorUtilityWidgetBlueprint* WidgetBlueprint = FindObject<UEditorUtilityWidgetBlueprint>(Package, *FPackageName::GetShortName(*AssetPath));
-			if (WidgetBlueprint)
+			FString AssetPath = NormalizeToPackageName(RegisteredWidgets[WidgetClass]);
+			if (AssetPath.IsEmpty()) return nullptr;
+
+			UPackage* Package = LoadPackage(nullptr, *AssetPath, LOAD_None);
+			if (Package)
 			{
-				TransientBP = CreateTransientBlueprint(WidgetClass, WidgetBlueprint);
+				UEditorUtilityWidgetBlueprint* WidgetBlueprint = FindObject<UEditorUtilityWidgetBlueprint>(Package, *FPackageName::GetShortName(*AssetPath));
+				if (WidgetBlueprint)
+				{
+					TransientBP = CreateTransientBlueprint(WidgetClass, WidgetBlueprint);
+				}
 			}
 		}
 
@@ -195,12 +198,14 @@ inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTrans
 			);
 			if (!FEditorWidgetTreeSerialization::LoadSerializationToWidgetBlueprint(SerializedWidgetTreePath, TransientBP, [&](FString SerializedEntryWidgetTreePath) -> UClass*
 				{
-					TMap<FString, TSubclassOf<UPyEditorUtilityEntryWidget>> EntryWidgetClassMap = RegisteredEntryWidgets[InWidgetClass];
+					// FindRef (not operator[]) so an unregistered widget class yields an empty map instead of
+					// asserting: the predicate now also runs when the original entry asset could be resolved.
+					TMap<FString, TSubclassOf<UPyEditorUtilityEntryWidget>> EntryWidgetClassMap = RegisteredEntryWidgets.FindRef(InWidgetClass);
 					FString RegisteredEntryWidgetBPPath = EntryWidgetClassMap.Contains(SerializedEntryWidgetTreePath) ? SerializedEntryWidgetTreePath : NormalizeToPackageName(SerializedEntryWidgetTreePath);
 					if (EntryWidgetClassMap.Contains(RegisteredEntryWidgetBPPath))
 					{
 						TSubclassOf<UEditorUtilityWidget> RegisteredEntryWidgetClass = EntryWidgetClassMap[RegisteredEntryWidgetBPPath];
-						UEditorUtilityWidgetBlueprint* TransientEntryWidgetBP = CreateTransientBlueprint(RegisteredEntryWidgetClass, nullptr, TransientBP, SerializedEntryWidgetTreePath);
+						UEditorUtilityWidgetBlueprint* TransientEntryWidgetBP = CreateTransientBlueprint(RegisteredEntryWidgetClass, nullptr, InBlueprint ? TransientBP : nullptr, SerializedEntryWidgetTreePath);
 						if (TransientEntryWidgetBP)
 						{	
 							return TransientEntryWidgetBP->GeneratedClass;
