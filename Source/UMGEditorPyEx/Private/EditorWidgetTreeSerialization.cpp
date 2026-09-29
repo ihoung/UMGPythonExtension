@@ -9,12 +9,13 @@
 #include "Components/Widget.h"
 #include "Components/PanelWidget.h"
 #include "Components/PanelSlot.h"
+#include "Components/NamedSlotInterface.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonWriter.h"
-#include "Policies/PrettyJsonPrintPolicy.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "JsonObjectConverter.h"
 #include "UObject/UnrealType.h"
 #include "UObject/UObjectHash.h"
@@ -135,13 +136,37 @@ namespace
 		}
 		WidgetObject->SetArrayField(TEXT("children"), MoveTemp(Children));
 
+		// Named slot content (e.g. an ExpandableArea's 'Header'/'Body' sections). Slot content widgets are not
+		// panel children and their backing properties (e.g. 'HeaderContent'/'BodyContent') are bare UPROPERTY()s,
+		// so they are invisible to both the children loop above and FJsonObjectConverter's CPF_Edit filter.
+		// Serialize them through INamedSlotInterface, which is how the UMG designer manages them.
+		if (INamedSlotInterface* NamedSlotHost = Cast<INamedSlotInterface>(Widget))
+		{
+			TArray<FName> SlotNames;
+			NamedSlotHost->GetSlotNames(SlotNames);
+
+			TArray<TSharedPtr<FJsonValue>> NamedSlots;
+			for (FName SlotName : SlotNames)
+			{
+				if (UWidget* SlotContent = NamedSlotHost->GetContentForSlot(SlotName))
+				{
+					TSharedRef<FJsonObject> NamedSlotObject = MakeShared<FJsonObject>();
+					NamedSlotObject->SetStringField(TEXT("name"), SlotName.ToString());
+					NamedSlotObject->SetObjectField(TEXT("content"), ConvertWidgetToJsonObject(SlotContent, OutEntryWidgetBlueprints));
+					NamedSlots.Add(MakeShared<FJsonValueObject>(NamedSlotObject));
+				}
+			}
+			WidgetObject->SetArrayField(TEXT("named_slots"), MoveTemp(NamedSlots));
+		}
+
 		return WidgetObject;
 	}
 
 	FString SerializeJsonObjectToString(const TSharedRef<FJsonObject>& JsonObject)
 	{
+		// Condensed policy: no newlines or indentation, so complex widget trees stay compact on disk.
 		FString JsonString;
-		TSharedRef<TJsonWriter<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TPrettyJsonPrintPolicy<TCHAR>>::Create(&JsonString);
+		TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&JsonString);
 		FJsonSerializer::Serialize(JsonObject, Writer);
 		return JsonString;
 	}
@@ -293,7 +318,7 @@ namespace
 	}
 
 	/** Recursively builds a widget (and its children) from a serialized json node into the given tree. */
-	UWidget* LoadWidgetFromJsonObject(const TSharedRef<FJsonObject>& WidgetObject, UWidgetTree* WidgetTree, UPanelWidget* ParentPanel, const FString& JsonDir, TFunctionRef<UClass*(FString)> EntryWidgetClassPredicate)
+	UWidget* LoadWidgetFromJsonObject(const TSharedRef<FJsonObject>& WidgetObject, UWidgetTree* WidgetTree, UPanelWidget* ParentPanel, const FString& JsonDir, TFunctionRef<UClass*(FString)> EntryWidgetClassPredicate, UWidget* ParentNamedSlotHost = nullptr, FName ParentNamedSlotName = NAME_None)
 	{
 		FString WidgetClassName;
 		if (!WidgetObject->TryGetStringField(TEXT("class"), WidgetClassName) || WidgetClassName.IsEmpty())
@@ -327,7 +352,7 @@ namespace
 		WidgetObject->TryGetBoolField(TEXT("bIsVariable"), bIsVariable);
 		NewWidget->bIsVariable = bIsVariable;
 
-		// Attach the widget to its parent panel (or make it the tree root)
+		// Attach the widget to its parent panel, to a named slot of its parent host, or make it the tree root
 		if (ParentPanel)
 		{
 			ParentPanel->AddChild(NewWidget);
@@ -341,6 +366,15 @@ namespace
 				{
 					FJsonObjectConverter::JsonObjectToUStruct(SlotPropertiesPtr->ToSharedRef(), NewWidget->Slot->GetClass(), NewWidget->Slot, CPF_Edit, CPF_Transient);
 				}
+			}
+		}
+		else if (ParentNamedSlotHost)
+		{
+			// Named slot content (e.g. an ExpandableArea's 'Header'/'Body' section) is not a panel child and has
+			// no slot; attach it through INamedSlotInterface the same way the UMG designer drop handler does.
+			if (INamedSlotInterface* NamedSlotHost = Cast<INamedSlotInterface>(ParentNamedSlotHost))
+			{
+				NamedSlotHost->SetContentForSlot(ParentNamedSlotName, NewWidget);
 			}
 		}
 		else
@@ -401,8 +435,32 @@ namespace
 				const TSharedPtr<FJsonObject>& ChildObjectPtr = ChildValue.IsValid() ? ChildValue->AsObject() : nullptr;
 				if (ChildObjectPtr && ChildObjectPtr.IsValid())
 				{
-					if (!LoadWidgetFromJsonObject(ChildObjectPtr.ToSharedRef(), WidgetTree, PanelWidget, JsonDir, EntryWidgetClassPredicate)) 
+					if (!LoadWidgetFromJsonObject(ChildObjectPtr.ToSharedRef(), WidgetTree, PanelWidget, JsonDir, EntryWidgetClassPredicate))
+					{
 						return nullptr;
+					}
+				}
+			}
+		}
+
+		// Named slot content (e.g. an ExpandableArea's 'Header'/'Body' sections) — see the serialization side
+		const TArray<TSharedPtr<FJsonValue>>* NamedSlotsPtr = nullptr;
+		if (WidgetObject->TryGetArrayField(TEXT("named_slots"), NamedSlotsPtr))
+		{
+			for (const TSharedPtr<FJsonValue>& NamedSlotValue : *NamedSlotsPtr)
+			{
+				const TSharedPtr<FJsonObject>& NamedSlotObject = NamedSlotValue.IsValid() ? NamedSlotValue->AsObject() : nullptr;
+				FString SlotNameString;
+				const TSharedPtr<FJsonObject>* SlotContentObjectPtr = nullptr;
+				if (NamedSlotObject.IsValid()
+					&& NamedSlotObject->TryGetStringField(TEXT("name"), SlotNameString)
+					&& NamedSlotObject->TryGetObjectField(TEXT("content"), SlotContentObjectPtr)
+					&& SlotContentObjectPtr->IsValid())
+				{
+					if (!LoadWidgetFromJsonObject(SlotContentObjectPtr->ToSharedRef(), WidgetTree, /*ParentPanel=*/nullptr, JsonDir, EntryWidgetClassPredicate, /*ParentNamedSlotHost=*/NewWidget, FName(*SlotNameString)))
+					{
+						return nullptr;
+					}
 				}
 			}
 		}
