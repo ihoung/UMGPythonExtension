@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Widget Python Scripting Tool",
+	"Description": "",
+	"Category": "Other",
+	"CreatedBy": "hyan",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "WidgetPyScript",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
