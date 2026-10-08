@@ -25,7 +25,7 @@ public:
 	UEditorUtilityWidgetSubsystem();
 
 	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
-	void RegisterWidgetWithBluprint(TSubclassOf<UEditorUtilityWidget> WidgetClass, FString Path);
+	void RegisterWidgetWithBlueprint(TSubclassOf<UEditorUtilityWidget> WidgetClass, FString Path);
 
 	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
 	void UnregisterWidget(TSubclassOf<UEditorUtilityWidget> WidgetClass);

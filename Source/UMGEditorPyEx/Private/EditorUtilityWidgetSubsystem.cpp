@@ -71,7 +71,7 @@ UEditorUtilityWidgetSubsystem::UEditorUtilityWidgetSubsystem()
 
 }
 
-void UEditorUtilityWidgetSubsystem::RegisterWidgetWithBluprint(TSubclassOf<UEditorUtilityWidget> WidgetClass, FString BlueprintPath)
+void UEditorUtilityWidgetSubsystem::RegisterWidgetWithBlueprint(TSubclassOf<UEditorUtilityWidget> WidgetClass, FString BlueprintPath)
 {
 	if (RegisteredWidgets.Contains(WidgetClass))
 	{
