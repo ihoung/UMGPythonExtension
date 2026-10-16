@@ -43,6 +43,7 @@ public class UMGEditorPyEx : ModuleRules
 			new string[]
 			{
 				"UMGEditor",
+				"BlueprintGraph",
                 "LevelEditor",
                 "UnrealEd",
                 "Json",

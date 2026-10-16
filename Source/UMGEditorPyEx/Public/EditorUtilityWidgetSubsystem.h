@@ -6,44 +6,54 @@
 #include "Templates/SubclassOf.h"
 #include "Templates/SharedPointer.h"
 #include "EditorSubsystem.h"
-#include "PyEditorUtilityEntryWidget.h"
 #include "EditorUtilityWidget.h"
 #include "EditorUtilityWidgetBlueprint.h"
-#include "Widgets/Docking/SDockTab.h"
-#include "Framework/Docking/TabManager.h"
+#include "Components/ListView.h"
 #include "EditorUtilityWidgetSubsystem.generated.h"
 
 /**
- * 
+ *
  */
 UCLASS(NotBlueprintable, MinimalAPI)
 class UEditorUtilityWidgetSubsystem : public UEditorSubsystem
 {
 	GENERATED_BODY()
-	
+
 public:
 	UEditorUtilityWidgetSubsystem();
 
 	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
-	void RegisterWidgetWithBlueprint(TSubclassOf<UEditorUtilityWidget> WidgetClass, FString Path);
+	void RegisterWidgetWithBlueprint(TSubclassOf<UEditorUtilityWidget> WidgetClass, FString Path, bool bKeepBpVariables = false);
+
+	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
+	void RegisterWidgetsWithBlueprints(TMap<TSubclassOf<UEditorUtilityWidget>, FString> WidgetClassBpMap, bool bKeepBpVariables = false);
 
 	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
 	void UnregisterWidget(TSubclassOf<UEditorUtilityWidget> WidgetClass);
 
 	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
-	void RegisterEntryWidgetClasses(TSubclassOf<UEditorUtilityWidget> WidgetClass, TMap<FString, TSubclassOf<UPyEditorUtilityEntryWidget>> EntryWidgetClasses);
+	void UnregisterAllWidgets();
 
 	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
-	UEditorUtilityWidget* SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass, bool bLoadSerialized=false);
+	void RegisterReferencedWidgetClasses(TSubclassOf<UEditorUtilityWidget> WidgetClass, TArray<TSubclassOf<UEditorUtilityWidget>> ReferencedWidgetClasses);
+
+	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
+	UEditorUtilityWidget* SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass, bool bLoadSerialized = false);
 
 protected:
-	TMap<TSubclassOf<UEditorUtilityWidget>, TMap<FString, TSubclassOf<UPyEditorUtilityEntryWidget>>> RegisteredEntryWidgets;
+	TMap<TSubclassOf<UEditorUtilityWidget>, TMap<FString, TSubclassOf<UEditorUtilityWidget>>> RegisteredReferencedWidgets;
 	TMap<TSubclassOf<UEditorUtilityWidget>, FString> RegisteredWidgets;
+	TMap<TSubclassOf<UEditorUtilityWidget>, bool> RegisteredWidgetBPVariablesCache;
 
 private:
-	inline UEditorUtilityWidgetBlueprint* CreateTransientBlueprint(TSubclassOf<UEditorUtilityWidget> InWidgetClass, UEditorUtilityWidgetBlueprint* InBlueprint, UObject* Outer=nullptr, FString SerializedWidgetTreePath=TEXT(""));
+	inline UEditorUtilityWidgetBlueprint* CreateTransientBlueprint(TSubclassOf<UEditorUtilityWidget> InWidgetClass, UEditorUtilityWidgetBlueprint* InBlueprint, FString SerializedWidgetTreePath = TEXT(""));
 
 	inline void ModifyBlueprintInternalReference(UEditorUtilityWidgetBlueprint* InBlueprint, TSubclassOf<UEditorUtilityWidget> InWidgetClass);
 
-	TMap<TSubclassOf<UEditorUtilityWidget>, UEditorUtilityWidgetBlueprint*> CreatedBlueprints;
+	inline void ModifyEntryWidgetReference(UListView* ListView, const TMap<FString, TSubclassOf<UEditorUtilityWidget>>& ReferencedWidgetClassMap);
+
+	inline void ModifyNamedSlotReference(UWidget* Content, const TMap<FString, TSubclassOf<UEditorUtilityWidget>>& ReferencedWidgetClassMap);
+
+	UPROPERTY()
+	TMap<TSubclassOf<UEditorUtilityWidget>, TObjectPtr<UEditorUtilityWidgetBlueprint>> CreatedBlueprints;
 };
