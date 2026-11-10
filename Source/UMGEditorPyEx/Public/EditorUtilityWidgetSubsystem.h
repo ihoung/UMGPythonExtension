@@ -9,11 +9,21 @@
 #include "EditorUtilityWidget.h"
 #include "EditorUtilityWidgetBlueprint.h"
 #include "Components/ListView.h"
+#include "UObject/StrongObjectPtr.h"
 #include "EditorUtilityWidgetSubsystem.generated.h"
 
 /**
  *
  */
+UENUM(NotBlueprintable)
+enum class EEditorUtilityWidgetSpawnMode : uint8
+{
+	MultiSpawn = 0,
+	Respawn = 1,
+	KeepIfExists = 2,
+};
+
+
 UCLASS(NotBlueprintable, MinimalAPI)
 class UEditorUtilityWidgetSubsystem : public UEditorSubsystem
 {
@@ -46,7 +56,7 @@ protected:
 	TMap<TSubclassOf<UEditorUtilityWidget>, bool> RegisteredWidgetBPVariablesCache;
 
 private:
-	inline UEditorUtilityWidgetBlueprint* CreateTransientBlueprint(TSubclassOf<UEditorUtilityWidget> InWidgetClass, UEditorUtilityWidgetBlueprint* InBlueprint, FString SerializedWidgetTreePath = TEXT(""));
+	UEditorUtilityWidgetBlueprint* CreateTransientBlueprint(TSubclassOf<UEditorUtilityWidget> InWidgetClass, UEditorUtilityWidgetBlueprint* InBlueprint, FString SerializedWidgetTreePath = TEXT(""));
 
 	inline void ModifyBlueprintInternalReference(UEditorUtilityWidgetBlueprint* InBlueprint, TSubclassOf<UEditorUtilityWidget> InWidgetClass);
 

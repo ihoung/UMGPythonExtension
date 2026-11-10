@@ -278,7 +278,7 @@ namespace
 	 * stages FBPVariableDescription::DefaultValue and flushes it to the generated class CDO from the
 	 * reinstancing stage, which a freshly created Blueprint (no old generated class to reinstance) never
 	 * reaches — and the Full compile even clears the stored string (FKismetCompilerContext). The caller must
-	 * apply the collected values to the CDO itself after the compile (see ApplyVariableDefaultValuesToCDO).
+	 * apply the collected values to the CDO itself after the compile (see ApplyPendingCDOValues).
 	 */
 	void LoadVariablesFromJsonArray(const TArray<TSharedPtr<FJsonValue>>& VariableValues, UBlueprint* Blueprint, TMap<FName, FString>* OutVariableDefaultValues)
 	{
@@ -359,7 +359,7 @@ namespace
 	 * Blueprint's generated class CDO, which is where widget instances take their class defaults from.
 	 * The CDO only exists once the Blueprint has been compiled: when it is not available yet (e.g. a fresh
 	 * transient Blueprint that the caller compiles afterwards) the caller must load them after its compile
-	 * through LoadWidgetClassPropertiesToCDO instead.
+	 * through ApplyPendingCDOValues instead.
 	 *
 	 * Each property is imported on its own: the CDO's editable property set contains values that cannot be
 	 * imported back (e.g. instanced subobjects like UWidget's 'Navigation'), and
@@ -422,6 +422,44 @@ namespace
 			GeneratedBPClass->UpdateCustomPropertyListForPostConstruction();
 		}
 		return true;
+	}
+
+	/**
+	 * Applies the member variables' default values (see LoadVariablesFromJsonArray) to the Blueprint's generated
+	 * class CDO, which is where widget instances take their variable defaults from. Like the widget class
+	 * properties above, the CDO only exists once the Blueprint has been compiled: when it is not available yet
+	 * the caller must apply them after its compile through ApplyPendingCDOValues instead.
+	 */
+	void ApplyVariableDefaultValuesObject(const TMap<FName, FString>& VariableDefaultValues, UBlueprint* Blueprint)
+	{
+		if (VariableDefaultValues.IsEmpty())
+		{
+			return;
+		}
+
+		UClass* GeneratedClass = Blueprint ? Blueprint->GeneratedClass : nullptr;
+		UObject* GeneratedCDO = GeneratedClass ? GeneratedClass->GetDefaultObject(/*bCreateIfNeeded=*/false) : nullptr;
+		if (!GeneratedCDO)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("'%s' has no generated class CDO; its variable default values were not applied."), *Blueprint->GetName());
+			return;
+		}
+
+		for (const TPair<FName, FString>& DefaultValuePair : VariableDefaultValues)
+		{
+			FProperty* Property = FindFProperty<FProperty>(GeneratedClass, DefaultValuePair.Key);
+			if (!Property)
+			{
+				continue;
+			}
+
+			// The same import path the compiler itself uses to apply a variable's DefaultValue to the CDO
+			// (FKismetCompilerContext::CopyTermDefaultsToDefaultObject).
+			if (!FBlueprintEditorUtils::PropertyValueFromString(Property, DefaultValuePair.Value, reinterpret_cast<uint8*>(GeneratedCDO), GeneratedCDO))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("The default value '%s' of variable '%s' of '%s' could not be imported and was skipped."), *DefaultValuePair.Value, *DefaultValuePair.Key.ToString(), *Blueprint->GetName());
+			}
+		}
 	}
 
 	FString SerializeJsonObjectToString(const TSharedRef<FJsonObject>& JsonObject)
@@ -945,7 +983,7 @@ bool FEditorWidgetTreeSerialization::SerializeWidgetBlueprintInternal(UBaseWidge
 	return true;
 }
 
-bool FEditorWidgetTreeSerialization::LoadSerializationToWidgetBlueprint(const FString& FilePath, UBaseWidgetBlueprint* WidgetBlueprint, bool bLoadVariables, TFunctionRef<UClass*(FString)> WidgetClassPredicate, TSharedPtr<FJsonObject>* OutWidgetClassProperties, TMap<FName, FString>* OutVariableDefaultValues)
+bool FEditorWidgetTreeSerialization::LoadSerializationToWidgetBlueprint(const FString& FilePath, UBaseWidgetBlueprint* WidgetBlueprint, bool bLoadVariables, TFunctionRef<UClass*(FString)> WidgetClassPredicate, FPendingCDOValues* OutPendingCDOValues)
 {
 	UWidgetTree* WidgetTree = WidgetBlueprint ? WidgetBlueprint->WidgetTree : nullptr;
 	if (!WidgetTree)
@@ -994,11 +1032,14 @@ bool FEditorWidgetTreeSerialization::LoadSerializationToWidgetBlueprint(const FS
 		}
 	}
 
-	// The Blueprint's member variables, imported on request (see LoadVariablesFromJsonArray). Their default
-	// values belong in the generated class CDO (see ApplyVariableDefaultValuesToCDO): when the CDO already
-	// exists (e.g. loading into an already-compiled Blueprint) they are applied right away; a freshly created
-	// Blueprint has no CDO until the caller compiles it, so the values are handed back instead, for the caller
-	// to apply after its compile.
+	// The Blueprint's member variables (imported on request, see LoadVariablesFromJsonArray) and the widget
+	// class's own properties both belong in the generated class CDO. When it already exists (e.g. loading into
+	// an already-compiled Blueprint) they are applied right away; a freshly created Blueprint has no CDO until
+	// the caller compiles it, so the parsed values are handed back through OutPendingCDOValues instead, for the
+	// caller to write after its compile with ApplyPendingCDOValues.
+	UClass* GeneratedClass = WidgetBlueprint->GeneratedClass;
+	const bool bCDOExists = GeneratedClass && GeneratedClass->GetDefaultObject(/*bCreateIfNeeded=*/false);
+
 	if (bLoadVariables)
 	{
 		const TArray<TSharedPtr<FJsonValue>>* VariableValues = nullptr;
@@ -1007,33 +1048,28 @@ bool FEditorWidgetTreeSerialization::LoadSerializationToWidgetBlueprint(const FS
 			TMap<FName, FString> VariableDefaultValues;
 			LoadVariablesFromJsonArray(*VariableValues, WidgetBlueprint, &VariableDefaultValues);
 
-			UClass* GeneratedClass = WidgetBlueprint->GeneratedClass;
-			if (GeneratedClass && GeneratedClass->GetDefaultObject(/*bCreateIfNeeded=*/false))
+			if (bCDOExists)
 			{
-				ApplyVariableDefaultValuesToCDO(VariableDefaultValues, WidgetBlueprint);
+				ApplyVariableDefaultValuesObject(VariableDefaultValues, WidgetBlueprint);
 			}
-			else if (OutVariableDefaultValues)
+			else if (OutPendingCDOValues)
 			{
-				*OutVariableDefaultValues = MoveTemp(VariableDefaultValues);
+				OutPendingCDOValues->VariableDefaultValues = MoveTemp(VariableDefaultValues);
 			}
 		}
 	}
 
-	// The widget class's own properties (see ApplyWidgetClassPropertiesObject). They live in the generated
-	// class CDO: if it already exists (e.g. loading into an already-compiled Blueprint) they are applied
-	// right away; a freshly created Blueprint has no CDO until the caller compiles it, so the parsed object
-	// is handed back instead, for the caller to load after its compile through LoadWidgetClassPropertiesToCDO.
+	// The widget class's own properties (see ApplyWidgetClassPropertiesObject).
 	const TSharedPtr<FJsonObject>* WidgetClassPropertiesPtr = nullptr;
 	if (RootObject->TryGetObjectField(TEXT("widget_properties"), WidgetClassPropertiesPtr) && WidgetClassPropertiesPtr->IsValid())
 	{
-		UClass* GeneratedClass = WidgetBlueprint->GeneratedClass;
-		if (GeneratedClass && GeneratedClass->GetDefaultObject(/*bCreateIfNeeded=*/false))
+		if (bCDOExists)
 		{
 			ApplyWidgetClassPropertiesObject(*WidgetClassPropertiesPtr, WidgetBlueprint);
 		}
-		else if (OutWidgetClassProperties)
+		else if (OutPendingCDOValues)
 		{
-			*OutWidgetClassProperties = *WidgetClassPropertiesPtr;
+			OutPendingCDOValues->WidgetClassProperties = *WidgetClassPropertiesPtr;
 		}
 	}
 
@@ -1043,41 +1079,12 @@ bool FEditorWidgetTreeSerialization::LoadSerializationToWidgetBlueprint(const FS
 	return true;
 }
 
-bool FEditorWidgetTreeSerialization::LoadWidgetClassPropertiesToCDO(const TSharedPtr<FJsonObject>& WidgetClassProperties, UBaseWidgetBlueprint* WidgetBlueprint)
+void FEditorWidgetTreeSerialization::ApplyPendingCDOValues(const FPendingCDOValues& PendingCDOValues, UBaseWidgetBlueprint* WidgetBlueprint)
 {
-	return ApplyWidgetClassPropertiesObject(WidgetClassProperties, WidgetBlueprint);
-}
-
-void FEditorWidgetTreeSerialization::ApplyVariableDefaultValuesToCDO(const TMap<FName, FString>& VariableDefaultValues, UBaseWidgetBlueprint* WidgetBlueprint)
-{
-	if (VariableDefaultValues.IsEmpty())
-	{
-		return;
-	}
-
-	UClass* GeneratedClass = WidgetBlueprint ? WidgetBlueprint->GeneratedClass : nullptr;
-	UObject* GeneratedCDO = GeneratedClass ? GeneratedClass->GetDefaultObject(/*bCreateIfNeeded=*/false) : nullptr;
-	if (!GeneratedCDO)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("'%s' has no generated class CDO; its variable default values were not applied."), *WidgetBlueprint->GetName());
-		return;
-	}
-
-	for (const TPair<FName, FString>& DefaultValuePair : VariableDefaultValues)
-	{
-		FProperty* Property = FindFProperty<FProperty>(GeneratedClass, DefaultValuePair.Key);
-		if (!Property)
-		{
-			continue;
-		}
-
-		// The same import path the compiler itself uses to apply a variable's DefaultValue to the CDO
-		// (FKismetCompilerContext::CopyTermDefaultsToDefaultObject).
-		if (!FBlueprintEditorUtils::PropertyValueFromString(Property, DefaultValuePair.Value, reinterpret_cast<uint8*>(GeneratedCDO), GeneratedCDO))
-		{
-			UE_LOG(LogTemp, Warning, TEXT("The default value '%s' of variable '%s' of '%s' could not be imported and was skipped."), *DefaultValuePair.Value, *DefaultValuePair.Key.ToString(), *WidgetBlueprint->GetName());
-		}
-	}
+	// Both value sets target the generated class CDO (see ApplyWidgetClassPropertiesObject /
+	// ApplyVariableDefaultValuesObject); either simply no-ops when empty.
+	ApplyWidgetClassPropertiesObject(PendingCDOValues.WidgetClassProperties, WidgetBlueprint);
+	ApplyVariableDefaultValuesObject(PendingCDOValues.VariableDefaultValues, WidgetBlueprint);
 }
 
 #undef LOCTEXT_NAMESPACE

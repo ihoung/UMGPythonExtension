@@ -7,6 +7,19 @@
 class UBaseWidgetBlueprint;
 class FClassProperty;
 class FJsonObject;
+
+/** The CDO-bound values LoadSerializationToWidgetBlueprint parsed but could not yet write into the generated
+ *  class CDO — a freshly created Blueprint has no CDO until the caller compiles it. Both the widget class's own
+ *  properties and the member variables' default values are destined for the same generated class CDO, so they
+ *  are handed back together through one out parameter and written after the compile with ApplyPendingCDOValues. */
+struct FPendingCDOValues
+{
+	/** The parsed 'widget_properties' object: the widget class's own defaults, taken by widget instances. */
+	TSharedPtr<FJsonObject> WidgetClassProperties;
+	/** The member variables' default values, keyed by variable name, exported as text. */
+	TMap<FName, FString> VariableDefaultValues;
+};
+
 /**
  *
  */
@@ -30,24 +43,17 @@ public:
 	 *  Blueprint class in the tree, or a ListView 'entryWidgetClass') when its serialized widget tree exists next
 	 *  to the loaded file; returning nullptr keeps the original Widget Blueprint. A Widget Blueprint referenced
 	 *  from several places resolves to one single generated class: the predicate is asked only once per load.
-	 *  The widget class's own properties (serialized in 'widget_properties') are applied to the generated class
-	 *  CDO when it already exists; when it does not (a freshly created Blueprint the caller compiles
-	 *  afterwards), the parsed properties are handed back through OutWidgetClassProperties so the caller can
-	 *  load them after its compile with LoadWidgetClassPropertiesToCDO.
-	 *  The member variables' default values follow the same rule: the compiler only applies them to the CDO
-	 *  from its reinstancing stage, which a freshly created Blueprint never reaches, so when the CDO does not
-	 *  exist yet they are handed back through OutVariableDefaultValues for the caller to apply after its
-	 *  compile with ApplyVariableDefaultValuesToCDO. */
-	static bool LoadSerializationToWidgetBlueprint(const FString& FilePath, UBaseWidgetBlueprint* WidgetBlueprint, bool bLoadVariables, TFunctionRef<UClass*(FString)> WidgetClassPredicate=[](FString){return nullptr;}, TSharedPtr<FJsonObject>* OutWidgetClassProperties = nullptr, TMap<FName, FString>* OutVariableDefaultValues = nullptr);
+	 *  The widget class's own properties (serialized in 'widget_properties') and the member variables' default
+	 *  values both belong in the generated class CDO. When it already exists (e.g. loading into an
+	 *  already-compiled Blueprint) they are applied right away; when it does not (a freshly created Blueprint
+	 *  the caller compiles afterwards) they are handed back through OutPendingCDOValues for the caller to write
+	 *  after its compile with ApplyPendingCDOValues. */
+	static bool LoadSerializationToWidgetBlueprint(const FString& FilePath, UBaseWidgetBlueprint* WidgetBlueprint, bool bLoadVariables, TFunctionRef<UClass*(FString)> WidgetClassPredicate=[](FString){return nullptr;}, FPendingCDOValues* OutPendingCDOValues = nullptr);
 
-	/** Applies the 'widget_properties' parsed by LoadSerializationToWidgetBlueprint to the Blueprint's
-	 *  generated class CDO, once the Blueprint has been compiled (the CDO does not exist before that). */
-	static bool LoadWidgetClassPropertiesToCDO(const TSharedPtr<FJsonObject>& WidgetClassProperties, UBaseWidgetBlueprint* WidgetBlueprint);
-
-	/** Applies the variable default values handed back by LoadSerializationToWidgetBlueprint to the
-	 *  Blueprint's generated class CDO, once the Blueprint has been compiled (the CDO does not exist before
-	 *  that). */
-	static void ApplyVariableDefaultValuesToCDO(const TMap<FName, FString>& VariableDefaultValues, UBaseWidgetBlueprint* WidgetBlueprint);
+	/** Writes the CDO-bound values handed back by LoadSerializationToWidgetBlueprint — the widget class's own
+	 *  properties and the member variables' default values — into the Blueprint's generated class CDO, once the
+	 *  Blueprint has been compiled (the CDO does not exist before that). */
+	static void ApplyPendingCDOValues(const FPendingCDOValues& PendingCDOValues, UBaseWidgetBlueprint* WidgetBlueprint);
 
 private:
 	static bool SerializeWidgetBlueprintInternal(UBaseWidgetBlueprint* WidgetBlueprint, const FString& DestinationDir, bool bAskAboutReferences, TSet<UBaseWidgetBlueprint*>& SerializedBlueprints);

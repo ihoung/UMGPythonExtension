@@ -104,20 +104,9 @@ UEditorUtilityWidgetSubsystem::UEditorUtilityWidgetSubsystem()
 
 void UEditorUtilityWidgetSubsystem::RegisterWidgetWithBlueprint(TSubclassOf<UEditorUtilityWidget> WidgetClass, FString BlueprintPath, bool bKeepBpVariables)
 {
-	if (CreatedBlueprints.Contains(WidgetClass))
-	{
-		CreatedBlueprints.Remove(WidgetClass);
-	}
-
-	if (RegisteredReferencedWidgets.Contains(WidgetClass))
-	{
-		RegisteredReferencedWidgets.Remove(WidgetClass);
-	}
-
 	if (RegisteredWidgets.Contains(WidgetClass))
 	{
-		RegisteredWidgets[WidgetClass] = BlueprintPath;
-		RegisteredWidgetBPVariablesCache[WidgetClass] = bKeepBpVariables;
+		UE_LOG(LogTemp, Log, TEXT("Widget class %s has been registered. Skipped registry. Unregister before re-registration if needed."), *WidgetClass->GetName());
 	}
 	else
 	{
@@ -130,20 +119,9 @@ void UEditorUtilityWidgetSubsystem::RegisterWidgetsWithBlueprints(TMap<TSubclass
 {
 	for (auto Pair : WidgetClassBpMap)
 	{
-		if (CreatedBlueprints.Contains(Pair.Key))
-		{
-			CreatedBlueprints.Remove(Pair.Key);
-		}
-
-		if (RegisteredReferencedWidgets.Contains(Pair.Key))
-		{
-			RegisteredReferencedWidgets.Remove(Pair.Key);
-		}
-
 		if (RegisteredWidgets.Contains(Pair.Key))
 		{
-			RegisteredWidgets[Pair.Key] = Pair.Value;
-			RegisteredWidgetBPVariablesCache[Pair.Key] = bKeepBpVariables;
+			UE_LOG(LogTemp, Log, TEXT("Widget class %s has been registered. Skipped registry. Unregister before re-registration if needed."), *Pair.Key->GetName());
 		}
 		else
 		{
@@ -248,10 +226,35 @@ UEditorUtilityWidget* UEditorUtilityWidgetSubsystem::SpawnAndRegisterTab(TSubcla
 		}
 	}
 
+	UEditorUtilitySubsystem* EditorUtilitySubsystem = GEditor->GetEditorSubsystem<UEditorUtilitySubsystem>();
+	FName TabID = FName();
+	EditorUtilitySubsystem->RegisterTabAndGetID(TransientBP, TabID);
+	if (EditorUtilitySubsystem->DoesTabExist(TabID))
+	{
+		switch (SpawnMode)
+		{
+		case EEditorUtilityWidgetSpawnMode::Respawn:
+			EditorUtilitySubsystem->CloseTabByID(TabID);
+			break;
+		case EEditorUtilityWidgetSpawnMode::KeepIfExists:
+			return EditorUtilitySubsystem->FindUtilityWidgetFromBlueprint(TransientBP);
+		default:
+			TransientBP = Cast<UEditorUtilityWidgetBlueprint>(
+				StaticDuplicateObject(
+					TransientBP, GetTransientPackage(), 
+					MakeUniqueObjectName(GetTransientPackage(), UEditorUtilityWidgetBlueprint::StaticClass(), TransientBP->GetFName()),
+					RF_Transient, UEditorUtilityWidgetBlueprint::StaticClass()
+				)
+			);
+			EditorUtilitySubsystem->RegisterTabAndGetID(TransientBP, TabID);
+			break;
+		}
+	}
+
 	if (TransientBP)
 	{
-		UEditorUtilitySubsystem* EditorUtilitySubsystem = GEditor->GetEditorSubsystem<UEditorUtilitySubsystem>();
-		return EditorUtilitySubsystem->SpawnAndRegisterTab(TransientBP);
+		if (!Title.IsEmptyOrWhitespace()) SetTabSpawnerEntryDisplayName(TabID, Title);
+		if (EditorUtilitySubsystem->SpawnRegisteredTabByID(TabID)) return EditorUtilitySubsystem->FindUtilityWidgetFromBlueprint(TransientBP);
 	}
 	else
 	{
@@ -261,7 +264,7 @@ UEditorUtilityWidget* UEditorUtilityWidgetSubsystem::SpawnAndRegisterTab(TSubcla
 	return nullptr;
 }
 
-inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTransientBlueprint(TSubclassOf<UEditorUtilityWidget> InWidgetClass, UEditorUtilityWidgetBlueprint* InBlueprint, FString SerializedWidgetTreePath)
+UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTransientBlueprint(TSubclassOf<UEditorUtilityWidget> InWidgetClass, UEditorUtilityWidgetBlueprint* InBlueprint, FString SerializedWidgetTreePath)
 {
 	if (InWidgetClass)
 	{
@@ -271,10 +274,9 @@ inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTrans
 		UEditorUtilityWidgetBlueprint* TransientBP;
 		TStrongObjectPtr<UEditorUtilityWidgetBlueprint> TransientBPGuard;
 		// The widget class's own properties and the member variables' default values only find a CDO once the
-		// Blueprint is compiled below: they are parsed during the load and applied after the compile
-		// (see LoadWidgetClassPropertiesToCDO / ApplyVariableDefaultValuesToCDO).
-		TSharedPtr<FJsonObject> PendingWidgetClassProperties;
-		TMap<FName, FString> PendingVariableDefaultValues;
+		// Blueprint is compiled below: they are parsed during the load and written after the compile
+		// (see LoadSerializationToWidgetBlueprint / ApplyPendingCDOValues).
+		FPendingCDOValues PendingCDOValues;
 		if (InBlueprint)
 		{
 			FBlueprintDuplicationScopeFlags DuplicationScopeFlags(FBlueprintDuplicationScopeFlags::NoExtraCompilation);
@@ -288,7 +290,7 @@ inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTrans
 		}
 		else
 		{
-			TransientBP = NewObject< UEditorUtilityWidgetBlueprint>(
+			TransientBP = NewObject<UEditorUtilityWidgetBlueprint>(
 				GetTransientPackage(),
 				MakeUniqueObjectName(GetTransientPackage(), UEditorUtilityWidgetBlueprint::StaticClass(), TransientBPName),
 				RF_Transient
@@ -316,8 +318,7 @@ inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTrans
 					}
 					return nullptr;
 				},
-				&PendingWidgetClassProperties,
-				&PendingVariableDefaultValues))
+				&PendingCDOValues))
 			{
 				UE_LOG(LogTemp, Error, TEXT("Loading Serialized Widget Tree to Transient Blueprint Failed: Path %s"), *SerializedWidgetTreePath);
 				return nullptr;
@@ -331,6 +332,7 @@ inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTrans
 				StripBlueprintAuthoredMembers(TransientBP, RegisteredWidgetBPVariablesCache.Contains(InWidgetClass) ? RegisteredWidgetBPVariablesCache[InWidgetClass] : false);
 			}
 			TransientBP->ParentClass = InWidgetClass;
+			TransientBP->bCanCallInitializedWithoutPlayerContext = true;
 			FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(TransientBP);
 			FKismetEditorUtilities::CompileBlueprint(TransientBP, EBlueprintCompileOptions::SkipGarbageCollection);
 
@@ -339,17 +341,9 @@ inline UEditorUtilityWidgetBlueprint* UEditorUtilityWidgetSubsystem::CreateTrans
 				return nullptr;
 			}
 
-			// The widget class's own properties, now that the compiled Blueprint has a CDO to hold them.
-			if (PendingWidgetClassProperties.IsValid())
-			{
-				FEditorWidgetTreeSerialization::LoadWidgetClassPropertiesToCDO(PendingWidgetClassProperties, TransientBP);
-			}
-			// The member variables' default values, now that the compiled Blueprint has a CDO to hold them
-			// (see ApplyVariableDefaultValuesToCDO).
-			if (!PendingVariableDefaultValues.IsEmpty())
-			{
-				FEditorWidgetTreeSerialization::ApplyVariableDefaultValuesToCDO(PendingVariableDefaultValues, TransientBP);
-			}
+			// The widget class's own properties and the member variables' default values, now that the compiled
+			// Blueprint has a CDO to hold them (see ApplyPendingCDOValues).
+			FEditorWidgetTreeSerialization::ApplyPendingCDOValues(PendingCDOValues, TransientBP);
 			return TransientBP;
 		}
 	}
