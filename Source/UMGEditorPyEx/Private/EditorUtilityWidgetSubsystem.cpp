@@ -186,7 +186,7 @@ void UEditorUtilityWidgetSubsystem::RegisterReferencedWidgetClasses(TSubclassOf<
 	}
 }
 
-UEditorUtilityWidget* UEditorUtilityWidgetSubsystem::SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass, bool bLoadSerialized)
+UEditorUtilityWidget* UEditorUtilityWidgetSubsystem::SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass, FText Title, EEditorUtilityWidgetSpawnMode SpawnMode, bool bLoadSerialized)
 {
 	if (IsRunningCommandlet()) return nullptr;
 	ensure(RegisteredWidgets.Contains(WidgetClass));
@@ -482,5 +482,30 @@ inline void UEditorUtilityWidgetSubsystem::ModifyNamedSlotReference(UWidget* Con
 				}
 			}
 		}
+	}
+}
+
+inline void UEditorUtilityWidgetSubsystem::SetTabSpawnerEntryDisplayName(const FName& TabId, const FText& DisplayName)
+{
+	TSharedPtr<FTabSpawnerEntry> Spawner = nullptr;
+	if (FGlobalTabmanager::Get()->HasTabSpawner(TabId))
+	{
+		Spawner = FGlobalTabmanager::Get()->FindTabSpawnerFor(TabId);
+	}
+	else
+	{
+		FLevelEditorModule& LevelEditorModule = FModuleManager::GetModuleChecked<FLevelEditorModule>(TEXT("LevelEditor"));
+		if (TSharedPtr<FTabManager> LevelEditorTabManager = LevelEditorModule.GetLevelEditorTabManager())
+		{
+			if (LevelEditorTabManager->HasTabSpawner(TabId))
+			{
+				Spawner = LevelEditorTabManager->FindTabSpawnerFor(TabId);
+			}
+		}
+	}
+
+	if (Spawner)
+	{
+		Spawner.Get()->SetDisplayName(DisplayName);
 	}
 }

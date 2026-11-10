@@ -48,7 +48,7 @@ public:
 	void RegisterReferencedWidgetClasses(TSubclassOf<UEditorUtilityWidget> WidgetClass, TArray<TSubclassOf<UEditorUtilityWidget>> ReferencedWidgetClasses);
 
 	UFUNCTION(BlueprintCallable, Category = "Development|Editor")
-	UEditorUtilityWidget* SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass, bool bLoadSerialized = false);
+	UEditorUtilityWidget* SpawnAndRegisterTab(TSubclassOf<UEditorUtilityWidget> WidgetClass, FText Title = FText(), EEditorUtilityWidgetSpawnMode SpawnMode = EEditorUtilityWidgetSpawnMode::Respawn, bool bLoadSerialized = false);
 
 protected:
 	TMap<TSubclassOf<UEditorUtilityWidget>, TMap<FString, TSubclassOf<UEditorUtilityWidget>>> RegisteredReferencedWidgets;
@@ -63,6 +63,8 @@ private:
 	inline void ModifyEntryWidgetReference(UListView* ListView, const TMap<FString, TSubclassOf<UEditorUtilityWidget>>& ReferencedWidgetClassMap);
 
 	inline void ModifyNamedSlotReference(UWidget* Content, const TMap<FString, TSubclassOf<UEditorUtilityWidget>>& ReferencedWidgetClassMap);
+
+	inline void SetTabSpawnerEntryDisplayName(const FName& TabId, const FText& DisplayName);
 
 	UPROPERTY()
 	TMap<TSubclassOf<UEditorUtilityWidget>, TObjectPtr<UEditorUtilityWidgetBlueprint>> CreatedBlueprints;
